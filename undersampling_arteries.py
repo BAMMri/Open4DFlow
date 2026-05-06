@@ -113,7 +113,7 @@ def is_within_ellipse(y, z, y_max, z_max, ellipse_radius):
 
 
 class MRISequence:
-    def __init__(self, TE, TR, fov, Nx, Ny, Nz, Nslices, venc, slice_thickness, alpha, bandwidth, tbw, heart_rate):
+    def __init__(self, TE, TR, fov, Nx, Ny, Nz, Nslices, venc, slice_thickness, alpha, bandwidth, tbw, heart_rate, undersampling_factor):
         # Initialize sequence parameters
         self.TE = TE
         self.TR = TR
@@ -147,6 +147,7 @@ class MRISequence:
         self.rf_inc = 0
 
         # Poisson disc sampling
+        self.undersampling_factor = undersampling_factor
         self.heart_rate = heart_rate
         self.max_phases = int(math.floor(60.0/self.heart_rate/(8*self.TR)))
         #self.max_phases = 1
@@ -195,7 +196,54 @@ class MRISequence:
         #
         #     self.phase_samples = np.array(filtered_points, dtype=object)
 
+        def save_derived_params(self, filepath: str, ppreport=None) -> None:
+        """Save all derived parameters to a JSON file."""
+        import json
 
+        params = {
+            # Input parameters
+            'TE': self.TE,
+            'TR': self.TR,
+            'fov': list(self.fov) if isinstance(self.fov, (np.ndarray, list)) else self.fov,
+            'Nx': self.Nx,
+            'Ny': self.Ny,
+            'Nz': self.Nz,
+            'alpha': self.alpha,
+            'bandwidth': self.bw,
+            'tbw': self.tbw,
+            #'slice_thickness': self.slice_thickness * 1000,  # in mm
+            "InPlaneResolution": [
+                float((self.fov[0] / self.Nx) * 1000),
+                float((self.fov[1] / self.Ny) * 1000)
+            ],
+            "SliceThickness": float((self.fov[2] / self.Nz) * 1000),
+
+            # Acceleration and Dynamic parameters
+            'undersampling_factor': self.undersampling_factor,
+            'venc': self.venc.tolist() if hasattr(self.venc, 'tolist') else self.venc,
+            #'n_phases': self.phase_samples.tolist() if hasattr(self.phase_samples, 'tolist') else self.phase_samples,
+            'CardiacNumberofImages': len(self.phase_samples),
+
+            # Derived k-space parameters
+            'delta_kx': self.delta_kx,
+            'delta_ky': self.delta_ky,
+            'delta_kz': self.delta_kz,
+
+            # System parameters
+            'system': {
+                'max_grad': self.sys.max_grad,
+                'max_slew': self.sys.max_slew,
+                'rf_ringdown_time': self.sys.rf_ringdown_time,
+                'rf_dead_time': self.sys.rf_dead_time,
+                'adc_dead_time': self.sys.adc_dead_time,
+                'grad_raster_time': self.sys.grad_raster_time,
+                'rf_raster_time': self.sys.rf_raster_time,
+                'adc_raster_time': self.sys.adc_raster_time,
+            },
+         }
+
+        with open(filepath, 'w') as f:
+            json.dump(params, f, indent=2)
     def halftrap_m0_1(self, A, w, r, t0, second_half=False):
         absA = np.abs(A)
         s = A / r
@@ -540,7 +588,7 @@ if __name__ == "__main__":
     from undersampling_arteries import MRISequence
 
     seq = MRISequence(TE=4.5e-3, TR=7e-3, fov=FOV, Nx=int(np.ceil(FOV[0] / RESOLUTION[0])),Ny=int(np.ceil(FOV[1] / RESOLUTION[1])),Nz=int(np.ceil(FOV[2] / RESOLUTION[2])),
-                      Nslices=6, venc=VENC, slice_thickness=80e-3, alpha=10, bandwidth=1e3, tbw=2, heart_rate=TRIG_TIME)
+                      Nslices=6, venc=VENC, slice_thickness=80e-3, alpha=10, bandwidth=1e3, tbw=2, heart_rate=TRIG_TIME, undersampling_factor=9)
 
     # M1 values in mT*ms^2/m
     venc_values = [
@@ -592,7 +640,8 @@ if __name__ == "__main__":
 
 
 
-
+    json_path = "derived_params.json"
+    seq.save_derived_params(json_path)
     #print(seq.seq.test_report())
     # print('Sequence ready')
     # seq.seq.set_definition('FOV', seq.fov)
