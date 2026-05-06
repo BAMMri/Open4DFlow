@@ -147,6 +147,7 @@ class MRISequence:
         self.rf_inc = 0
 
         # Poisson disc sampling
+        self.undersampling_factor = undersampling_factor
         self.heart_rate = heart_rate
         self.max_phases = int(math.floor(self.heart_rate/(8 * self.TR)))
         #self.max_phases = 1
