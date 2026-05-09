@@ -5,20 +5,16 @@ import scipy
 from scipy import signal, interpolate
 import matplotlib.pyplot as plt
 import argparse
-import os.path
-import glob
 import json
+import nibabel as nib
+from pathlib import Path
 
 
 def sgolay3d(z, window_size, order, derivative=None):
-    """
-    Apply Savitzky-Golay filter to 3D data.
-    """
-    # Check window size is odd
+    """Apply Savitzky-Golay filter to 3D data."""
     if window_size % 2 == 0:
         raise ValueError('window_size must be odd')
 
-    # Number of terms in the polynomial expression for 3D
     n_terms = (order + 1) * (order + 2) * (order + 3) // 6
 
     if window_size ** 3 < n_terms:
@@ -26,83 +22,63 @@ def sgolay3d(z, window_size, order, derivative=None):
 
     half_size = window_size // 2
 
-    # Exponents of the polynomial (x^a * y^b * z^c)
-    # Generate exponents for terms up to specified order
     exps = [(i - j - k, j, k) for i in range(order + 1) for j in range(i + 1) for k in range(i - j + 1)]
 
-    # Coordinates of points in the cube window
     ind = np.arange(-half_size, half_size + 1, dtype=np.float64)
 
-    # Create coordinate grids correctly
     xx, yy, zz = np.meshgrid(ind, ind, ind, indexing='ij')
-    dx = xx.reshape(-1)  # Flatten to 1D
-    dy = yy.reshape(-1)  # Flatten to 1D
-    dz = zz.reshape(-1)  # Flatten to 1D
+    dx = xx.reshape(-1)
+    dy = yy.reshape(-1)
+    dz = zz.reshape(-1)
 
-    # Build matrix of system of equations
     A = np.empty((window_size ** 3, len(exps)))
     for i, exp in enumerate(exps):
         A[:, i] = (dx ** exp[0]) * (dy ** exp[1]) * (dz ** exp[2])
 
-    # Pad input array with appropriate values at the six faces and corners
     new_shape = (z.shape[0] + 2 * half_size, z.shape[1] + 2 * half_size, z.shape[2] + 2 * half_size)
     Z = np.zeros(new_shape)
 
-    # Insert the original array in the center
     Z[half_size:-half_size, half_size:-half_size, half_size:-half_size] = z
 
-    # Pad the six faces (front, back, top, bottom, left, right)
-    # Front face (z=0)
     band = z[:, :, 0]
     Z[half_size:-half_size, half_size:-half_size, :half_size] = np.stack([band] * half_size, axis=-1) - np.abs(
         np.flip(z[:, :, 1:half_size + 1], axis=2) - band[:, :, np.newaxis])
 
-    # Back face (z=max)
     band = z[:, :, -1]
     Z[half_size:-half_size, half_size:-half_size, -half_size:] = np.stack([band] * half_size, axis=-1) + np.abs(
         np.flip(z[:, :, -half_size - 1:-1], axis=2) - band[:, :, np.newaxis])
 
-    # Top face (y=0)
     band = z[:, 0, :]
     Z[half_size:-half_size, :half_size, half_size:-half_size] = np.stack([band] * half_size, axis=1) - np.abs(
         np.flip(z[:, 1:half_size + 1, :], axis=1) - band[:, np.newaxis, :])
 
-    # Bottom face (y=max)
     band = z[:, -1, :]
     Z[half_size:-half_size, -half_size:, half_size:-half_size] = np.stack([band] * half_size, axis=1) + np.abs(
         np.flip(z[:, -half_size - 1:-1, :], axis=1) - band[:, np.newaxis, :])
 
-    # Left face (x=0)
     band = z[0, :, :]
     Z[:half_size, half_size:-half_size, half_size:-half_size] = np.stack([band] * half_size, axis=0) - np.abs(
         np.flip(z[1:half_size + 1, :, :], axis=0) - band[np.newaxis, :, :])
 
-    # Right face (x=max)
     band = z[-1, :, :]
     Z[-half_size:, half_size:-half_size, half_size:-half_size] = np.stack([band] * half_size, axis=0) + np.abs(
         np.flip(z[-half_size - 1:-1, :, :], axis=0) - band[np.newaxis, :, :])
 
-    # Solve system and convolve
     pinv_A = np.linalg.pinv(A)
 
     if derivative is None:
-        # For smoothing only
         m = pinv_A[0].reshape((window_size, window_size, window_size))
         return scipy.signal.fftconvolve(Z, m, mode='valid')
     elif derivative == 'x':
-        # x derivative
         c = pinv_A[1].reshape((window_size, window_size, window_size))
         return scipy.signal.fftconvolve(Z, -c, mode='valid')
     elif derivative == 'y':
-        # y derivative
         r = pinv_A[2].reshape((window_size, window_size, window_size))
         return scipy.signal.fftconvolve(Z, -r, mode='valid')
     elif derivative == 'z':
-        # z derivative
         z_deriv = pinv_A[3].reshape((window_size, window_size, window_size))
         return scipy.signal.fftconvolve(Z, -z_deriv, mode='valid')
     elif derivative == 'all':
-        # All derivatives
         x_deriv = pinv_A[1].reshape((window_size, window_size, window_size))
         y_deriv = pinv_A[2].reshape((window_size, window_size, window_size))
         z_deriv = pinv_A[3].reshape((window_size, window_size, window_size))
@@ -114,29 +90,29 @@ def sgolay3d(z, window_size, order, derivative=None):
 
 
 def calc_disp_3d(flow_x, flow_y, flow_z, info, mask):
-    """
-    Calculate 3D displacement from flow data.
+    """Calculate 3D displacement from flow velocity data (m/s input).
+
+    flow_x/y/z: (x, y, z, t) velocity arrays in m/s
+    info: dict with CardiacNumberOfImages, SliceThickness (mm), RepetitionTime (ms),
+          InPlaneResolution ([res_x_mm, res_y_mm])
+    Returns: dispVx, dispVy, dispVz in mm, shape (x, y, z, t)
     """
 
-    # Function for interpolating coordinates in 3D
     def calcInterpolatedIndex3D(x, y, z, ActInterpFacX, ActInterpFacY, ActInterpFacZ):
         interpX = round((x - 1) * ActInterpFacX + 1)
         interpY = round((y - 1) * ActInterpFacY + 1)
         interpZ = round((z - 1) * ActInterpFacZ + 1)
 
-        # Boundary checks for x
         if interpX < 0:
             interpX = 0
         elif interpX > (interpDispX.shape[0] - 1):
             interpX = interpDispX.shape[0] - 1
 
-        # Boundary checks for y
         if interpY < 0:
             interpY = 0
         elif interpY > (interpDispX.shape[1] - 1):
             interpY = interpDispX.shape[1] - 1
 
-        # Boundary checks for z
         if interpZ < 0:
             interpZ = 0
         elif interpZ > (interpDispX.shape[2] - 1):
@@ -144,69 +120,48 @@ def calc_disp_3d(flow_x, flow_y, flow_z, info, mask):
 
         return interpX, interpY, interpZ
 
-    # Read info from header
     nPhases = int(info['CardiacNumberOfImages'])
     SliceThickness = info['SliceThickness']
     dt = float(info['RepetitionTime'])  # ms
     print(f"Repetition time: {dt} ms")
 
-    # Get velocity direction matrix (default to all positive if not specified)
-    vel_dir_matrix = info.get('VelocityDirectionMatrix', [1, 1, 1])
-    print(f"Velocity direction matrix: {vel_dir_matrix}")
+    dimx = flow_x.shape[0]
+    dimy = flow_x.shape[1]
+    dimz = flow_x.shape[2]
 
-    # Apply velocity direction matrix
-    flow_x = flow_x * vel_dir_matrix[0]
-    flow_y = flow_y * vel_dir_matrix[1]
-    flow_z = flow_z * vel_dir_matrix[2]
-
-    # Get dimensions of the input data
-    dimx = flow_x.shape[0]  # height
-    dimy = flow_x.shape[1]  # width
-    dimz = flow_x.shape[2]  # depth
-
-    # Initialize displacement vectors
     dispVx = np.zeros((dimx, dimy, dimz, nPhases))
     dispVy = np.zeros((dimx, dimy, dimz, nPhases))
     dispVz = np.zeros((dimx, dimy, dimz, nPhases))
 
-    # First, correct the flow data by subtracting mean flow across phases
-    # This ensures zero net displacement over the cycle
     flow_x_corrected = flow_x.copy()
     flow_y_corrected = flow_y.copy()
     flow_z_corrected = flow_z.copy()
 
-    # Subtract mean flow across phases (time dimension is the last dimension)
     flow_x_corrected -= np.mean(flow_x_corrected, axis=-1, keepdims=True)
     flow_y_corrected -= np.mean(flow_y_corrected, axis=-1, keepdims=True)
     flow_z_corrected -= np.mean(flow_z_corrected, axis=-1, keepdims=True)
 
-    # Calculate velocity to displacement conversion factor
-    # Convert from cm/s to mm/phase (displacement = velocity * time)
-    # 10 is to convert cm to mm, dt is in ms so divide by 1000 to get seconds
-    conversion_factor = 0.5 * 10 * dt / 1000
+    # velocity [m/s] * dt [ms] = displacement [mm]  (1 m/s * 1 ms = 1 mm)
+    conversion_factor = 0.5 * dt
 
-    # Calculate differential displacements using corrected flow
     diffDispX = flow_x_corrected * conversion_factor / info['InPlaneResolution'][0]
     diffDispY = flow_y_corrected * conversion_factor / info['InPlaneResolution'][1]
     diffDispZ = flow_z_corrected * conversion_factor / SliceThickness
 
     print(f"Differential displacement shape: {diffDispX.shape}")
 
-    # Create finer grid for interpolation
     xnew = np.linspace(0, dimx - 1, int(dimx * 1.25))
     ynew = np.linspace(0, dimy - 1, int(dimy * 1.25))
     znew = np.linspace(0, dimz - 1, int(dimz * 1.25))
 
     X, Y, Z = np.meshgrid(xnew, ynew, znew, indexing='ij')
 
-    # Initialize interpolated displacement arrays
     interpDispX = np.zeros((len(xnew), len(ynew), len(znew), nPhases))
     interpDispY = np.zeros((len(xnew), len(ynew), len(znew), nPhases))
     interpDispZ = np.zeros((len(xnew), len(ynew), len(znew), nPhases))
 
     print(f"Number of phases: {nPhases}")
 
-    # Perform interpolation for each phase
     x = np.linspace(0, dimx - 1, dimx)
     y = np.linspace(0, dimy - 1, dimy)
     z = np.linspace(0, dimz - 1, dimz)
@@ -228,44 +183,27 @@ def calc_disp_3d(flow_x, flow_y, flow_z, info, mask):
 
     print(f"ActInterpFacX: {ActInterpFacX}, ActInterpFacY: {ActInterpFacY}, ActInterpFacZ: {ActInterpFacZ}")
 
-    # Calculate cumulative displacements with Forward/Backward integration
-    # First phase has zero displacement
     for iph in range(1, nPhases):
         for ix in range(dimx):
             for iy in range(dimy):
                 for iz in range(dimz):
                     if mask[ix, iy, iz]:
-                        # Forward displacement: current position + current displacement
                         new_xn = ix + dispVx[ix, iy, iz, iph]
                         new_yn = iy + dispVy[ix, iy, iz, iph]
                         new_zn = iz + dispVz[ix, iy, iz, iph]
 
-                        # Backward displacement: current position - previous displacement
                         new_xnm1 = ix - dispVx[ix, iy, iz, iph - 1]
                         new_ynm1 = iy - dispVy[ix, iy, iz, iph - 1]
                         new_znm1 = iz - dispVz[ix, iy, iz, iph - 1]
 
-                        # Get interpolated indices for forward position
                         inew_xn, inew_yn, inew_zn = calcInterpolatedIndex3D(
-                            new_xn,
-                            new_yn,
-                            new_zn,
-                            ActInterpFacX,
-                            ActInterpFacY,
-                            ActInterpFacZ,
-                        )
+                            new_xn, new_yn, new_zn,
+                            ActInterpFacX, ActInterpFacY, ActInterpFacZ)
 
-                        # Get interpolated indices for backward position
                         inew_xnm1, inew_ynm1, inew_znm1 = calcInterpolatedIndex3D(
-                            new_xnm1,
-                            new_ynm1,
-                            new_znm1,
-                            ActInterpFacX,
-                            ActInterpFacY,
-                            ActInterpFacZ,
-                        )
+                            new_xnm1, new_ynm1, new_znm1,
+                            ActInterpFacX, ActInterpFacY, ActInterpFacZ)
 
-                        # Sample velocities at both positions
                         forward_velocity_x = interpDispX[inew_xn, inew_yn, inew_zn, iph]
                         forward_velocity_y = interpDispY[inew_xn, inew_yn, inew_zn, iph]
                         forward_velocity_z = interpDispZ[inew_xn, inew_yn, inew_zn, iph]
@@ -274,71 +212,16 @@ def calc_disp_3d(flow_x, flow_y, flow_z, info, mask):
                         backward_velocity_y = interpDispY[inew_xnm1, inew_ynm1, inew_znm1, iph - 1]
                         backward_velocity_z = interpDispZ[inew_xnm1, inew_ynm1, inew_znm1, iph - 1]
 
-                        # Combine forward and backward velocities (delta displacement)
                         delta_disp_x = backward_velocity_x + forward_velocity_x
                         delta_disp_y = backward_velocity_y + forward_velocity_y
                         delta_disp_z = backward_velocity_z + forward_velocity_z
 
-                        # Calculate total displacement as previous displacement plus delta displacement
                         dispVx[ix, iy, iz, iph] = dispVx[ix, iy, iz, iph - 1] + delta_disp_x
                         dispVy[ix, iy, iz, iph] = dispVy[ix, iy, iz, iph - 1] + delta_disp_y
                         dispVz[ix, iy, iz, iph] = dispVz[ix, iy, iz, iph - 1] + delta_disp_z
 
     print(f"Displacement shapes: {dispVx.shape}, {dispVy.shape}, {dispVz.shape}")
-    #
-    # for iph in range(nPhases):
-    #     points = (x, y, z)
-    #     interp_x_func = scipy.interpolate.RegularGridInterpolator(points, diffDispX[:, :, :, iph], bounds_error=False)
-    #     interp_y_func = scipy.interpolate.RegularGridInterpolator(points, diffDispY[:, :, :, iph], bounds_error=False)
-    #     interp_z_func = scipy.interpolate.RegularGridInterpolator(points, diffDispZ[:, :, :, iph], bounds_error=False)
-    #
-    #     pts = np.vstack([X.ravel(), Y.ravel(), Z.ravel()]).T
-    #
-    #     interpDispX[:, :, :, iph] = interp_x_func(pts).reshape(X.shape)
-    #     interpDispY[:, :, :, iph] = interp_y_func(pts).reshape(Y.shape)
-    #     interpDispZ[:, :, :, iph] = interp_z_func(pts).reshape(Z.shape)
-    #
-    # ActInterpFacX = len(xnew) / len(x)
-    # ActInterpFacY = len(ynew) / len(y)
-    # ActInterpFacZ = len(znew) / len(z)
-    #
-    # print(f"ActInterpFacX: {ActInterpFacX}, ActInterpFacY: {ActInterpFacY}, ActInterpFacZ: {ActInterpFacZ}")
-    #
-    # # Calculate cumulative displacements
-    # # First phase has zero displacement
-    # for iph in range(1, nPhases):
-    #     for ix in range(dimx):
-    #         for iy in range(dimy):
-    #             for iz in range(dimz):
-    #                 if mask[ix, iy, iz]:
-    #                     # Get position at previous time step including displacement
-    #                     new_xn = ix + dispVx[ix, iy, iz, iph - 1]
-    #                     new_yn = iy + dispVy[ix, iy, iz, iph - 1]
-    #                     new_zn = iz + dispVz[ix, iy, iz, iph - 1]
-    #
-    #                     # Get interpolated indices for this position
-    #                     inew_xn, inew_yn, inew_zn = calcInterpolatedIndex3D(
-    #                         new_xn,
-    #                         new_yn,
-    #                         new_zn,
-    #                         ActInterpFacX,
-    #                         ActInterpFacY,
-    #                         ActInterpFacZ,
-    #                     )
-    #
-    #                     # Get velocity at this new position from the interpolated grid
-    #                     current_velocity_x = interpDispX[inew_xn, inew_yn, inew_zn, iph]
-    #                     current_velocity_y = interpDispY[inew_xn, inew_yn, inew_zn, iph]
-    #                     current_velocity_z = interpDispZ[inew_xn, inew_yn, inew_zn, iph]
-    #
-    #                     # Calculate total displacement as previous displacement plus new displacement
-    #                     dispVx[ix, iy, iz, iph] = dispVx[ix, iy, iz, iph - 1] + current_velocity_x
-    #                     dispVy[ix, iy, iz, iph] = dispVy[ix, iy, iz, iph - 1] + current_velocity_y
-    #                     dispVz[ix, iy, iz, iph] = dispVz[ix, iy, iz, iph - 1] + current_velocity_z
-    #
-    # print(f"Displacement shapes: {dispVx.shape}, {dispVy.shape}, {dispVz.shape}")
 
-    # Convert displacements to physical units (mm)
     dispVxi_mm = info['InPlaneResolution'][0] * dispVx
     dispVyi_mm = info['InPlaneResolution'][1] * dispVy
     dispVzi_mm = SliceThickness * dispVz
@@ -346,19 +229,18 @@ def calc_disp_3d(flow_x, flow_y, flow_z, info, mask):
     return dispVxi_mm.astype(np.float32), dispVyi_mm.astype(np.float32), dispVzi_mm.astype(np.float32)
 
 
-def calc_strain_3d(dispX, dispY, dispZ, mask, fx=None, fy=None, fz=None):
-    """
-    Calculate 3D strain tensor and eigenvalues for multiple phases.
+def calc_strain_3d(dispX, dispY, dispZ, mask):
+    """Calculate 3D strain tensor eigenvalues and eigenvectors.
+
+    Returns:
+        Eig_v:    (x, y, z, 3, t) eigenvalues ordered per ORMIR-MIDS spec
+        Eig_vecs: (x, y, z, 3, 3, t) eigenvectors [ev_order, vector_component, t]
     """
 
     def strain3D(dispX_3D, dispY_3D, dispZ_3D):
-        """Calculate strain tensor for a single phase"""
         dimx, dimy, dimz = dispX_3D.shape
-
-        # Initialize strain tensor (3x3 for each point)
         E = np.zeros((dimx, dimy, dimz, 3, 3))
 
-        # Calculate all partial derivatives using 3D Savitzky-Golay filter
         Uxx = sgolay3d(dispX_3D, window_size=13, order=4, derivative='x')
         Uxy = sgolay3d(dispX_3D, window_size=13, order=4, derivative='y')
         Uxz = sgolay3d(dispX_3D, window_size=13, order=4, derivative='z')
@@ -371,94 +253,70 @@ def calc_strain_3d(dispX, dispY, dispZ, mask, fx=None, fy=None, fz=None):
         Uzy = sgolay3d(dispZ_3D, window_size=13, order=4, derivative='y')
         Uzz = sgolay3d(dispZ_3D, window_size=13, order=4, derivative='z')
 
-        # Calculate strain tensor for each point
         for ix in range(dimx):
             for iy in range(dimy):
                 for iz in range(dimz):
-                    # The displacement gradient
                     Ugrad = np.array([
                         [Uxx[ix, iy, iz], Uxy[ix, iy, iz], Uxz[ix, iy, iz]],
                         [Uyx[ix, iy, iz], Uyy[ix, iy, iz], Uyz[ix, iy, iz]],
                         [Uzx[ix, iy, iz], Uzy[ix, iy, iz], Uzz[ix, iy, iz]]
                     ])
-
-                    # The (inverse) deformation gradient
                     Finv = np.eye(3) - Ugrad
-
-                    # The 3D Eulerian strain tensor
                     e = 0.5 * (np.eye(3) - Finv @ Finv.T)
-
-                    # Store tensor in the output matrix
                     E[ix, iy, iz, :, :] = e
 
         return E
 
-    # Get dimensions
     dimx, dimy, dimz = dispX.shape[:3]
-    n_phases = dispX.shape[3] if len(dispX.shape) > 3 else 1
+    n_phases = dispX.shape[3] if dispX.ndim > 3 else 1
 
-    # Initialize eigenvalue array (3 eigenvalues for each point and phase)
+    # Internal storage: (x, y, z, ev_order, t) and (x, y, z, ev_order, vec_component, t)
     Eig_v = np.zeros((dimx, dimy, dimz, 3, n_phases))
+    Eig_vecs = np.zeros((dimx, dimy, dimz, 3, 3, n_phases))
 
-    # Process each phase separately
     for iph in range(n_phases):
-        if n_phases > 1:
-            # Extract the displacement field for this phase
-            dispX_phase = dispX[:, :, :, iph]
-            dispY_phase = dispY[:, :, :, iph]
-            dispZ_phase = dispZ[:, :, :, iph]
-        else:
-            # If there's only one phase, use the input directly
-            dispX_phase = dispX
-            dispY_phase = dispY
-            dispZ_phase = dispZ
+        dispX_phase = dispX[:, :, :, iph] if n_phases > 1 else dispX
+        dispY_phase = dispY[:, :, :, iph] if n_phases > 1 else dispY
+        dispZ_phase = dispZ[:, :, :, iph] if n_phases > 1 else dispZ
 
-        # Calculate the 3D strain tensor for this phase
         strain_tensor = strain3D(dispX_phase, dispY_phase, dispZ_phase)
 
-        # Calculate eigenvalues at each point
         for ix in range(dimx):
             for iy in range(dimy):
                 for iz in range(dimz):
-                    # Check if this point is within the mask
-                    # Adapt the condition based on mask dimensions
-                    if mask.ndim == 3:  # 3D mask
-                        mask_condition = mask[ix, iy, iz]
-                    elif mask.ndim == 2:  # 2D mask
-                        mask_condition = mask[ix, iy]
-                    else:  # Handle other cases
-                        mask_condition = True  # Default to processing all points
+                    if mask[ix, iy, iz]:
+                        # eigh: eigenvalues in ascending order, eigenvectors as columns
+                        eigenvalues, eigenvectors = np.linalg.eigh(strain_tensor[ix, iy, iz])
 
-                    if mask_condition:
-                        # Calculate eigenvalues and sort them
-                        eigenvalues = LA.eigvals(strain_tensor[ix, iy, iz, :, :])
-                        # Sort in descending order (e1: stretching, e2: intermediate, e3: compression)
-                        Eig_v[ix, iy, iz, :, iph] = np.sort(eigenvalues)[::-1]
+                        # ORMIR-MIDS order: largest positive, most negative (largest abs negative), remaining
+                        idx_pos = int(np.argmax(eigenvalues))
+                        idx_neg = int(np.argmin(eigenvalues))
+                        idx_rem = 3 - idx_pos - idx_neg
+                        order = [idx_pos, idx_neg, idx_rem]
 
-    # If there's only one phase, remove the phase dimension for compatibility
-    if n_phases == 1:
-        Eig_v = Eig_v[:, :, :, :, 0]
+                        Eig_v[ix, iy, iz, :, iph] = eigenvalues[order]
+                        # eigenvectors[:, i] is i-th vector; store as (ev_order, vec_component)
+                        Eig_vecs[ix, iy, iz, :, :, iph] = eigenvectors[:, order].T
 
-    return Eig_v
+    return Eig_v, Eig_vecs
 
 
-def sum_strain_3d(Eig_v, mask, info):
+def sum_strain_3d(Eig_v, mask, n_phases):
+    """Summarize strain eigenvalues by computing median within mask per phase.
+
+    Eig_v: (x, y, z, 3, t) internal shape
+    Returns: (e1_Line, e1_max, e2_Line, e2_max, e3_Line, e3_max)
     """
-    Summarize strain values by calculating median values within mask.
-    """
-    nPhases = int(info['CardiacNumberOfImages'])
-    e1_Line = np.zeros(nPhases)  # First principal strain (largest eigenvalue)
-    e2_Line = np.zeros(nPhases)  # Second principal strain
-    e3_Line = np.zeros(nPhases)  # Third principal strain (smallest eigenvalue)
+    e1_Line = np.zeros(n_phases)
+    e2_Line = np.zeros(n_phases)
+    e3_Line = np.zeros(n_phases)
 
-    for i_ph in range(nPhases):
-        #print(nPhases)
-        E1 = Eig_v[:, :, :, 0, i_ph]  # First principal strain
-        E2 = Eig_v[:, :, :, 1, i_ph]  # Second principal strain
-        E3 = Eig_v[:, :, :, 2, i_ph]  # Third principal strain
+    for i_ph in range(n_phases):
+        E1 = Eig_v[:, :, :, 0, i_ph]
+        E2 = Eig_v[:, :, :, 1, i_ph]
+        E3 = Eig_v[:, :, :, 2, i_ph]
 
-        # Calculate median of non-zero values within the mask
-        masked_E1 = E1[mask]  # Result shape: (n_masked_voxels, z)
+        masked_E1 = E1[mask]
         masked_E2 = E2[mask]
         masked_E3 = E3[mask]
 
@@ -467,197 +325,205 @@ def sum_strain_3d(Eig_v, mask, info):
         if len(masked_E2) > 0:
             e2_Line[i_ph] = np.nanmedian(masked_E2[masked_E2 != 0])
         if len(masked_E3) > 0:
-            e3_Line[i_ph] = (np.nanmedian(masked_E3[masked_E3 != 0]))
+            e3_Line[i_ph] = np.nanmedian(masked_E3[masked_E3 != 0])
 
-    # Maximum values
-    e1_max = np.round(np.nanmax(e1_Line), 3)  # First principal strain (stretching)
-    e2_max = np.round(np.nanmax(e2_Line), 3)  # Second principal strain
-    e3_max = np.round(np.nanmax(e3_Line), 3)  # Third principal strain (compression)
+    e1_max = np.round(np.nanmax(e1_Line), 3)
+    e2_max = np.round(np.nanmax(np.abs(e2_Line)), 3)
+    e3_max = np.round(np.nanmax(e3_Line), 3)
 
     return e1_Line, e1_max, e2_Line, e2_max, e3_Line, e3_max
 
 
-def load_config(config_path):
-    """Load and process JSON configuration file."""
-    with open(config_path, 'r') as f:
-        config = json.load(f)
+def load_ormir_mids_velocity(input_path: Path):
+    """Load velocity NIfTI from ORMIR-MIDS format.
 
-    return config
+    input_path: path to *_vel.nii.gz file, or an ORMIR-MIDS subject folder
+                (in which case mr-quant/*_vel.nii.gz is used)
 
+    Returns: (velocities, affine, header, sidecar, vel_path)
+        velocities: (x, y, z, t, 3) float array in m/s
+        affine:     4x4 affine matrix
+        header:     NIfTI header object
+        sidecar:    dict loaded from the _vel.json sidecar
+        vel_path:   Path to the resolved *_vel.nii.gz file
+    """
+    input_path = Path(input_path)
+    if input_path.is_dir():
+        mr_quant = input_path / "mr-quant"
+        vel_files = sorted(mr_quant.glob("*_vel.nii.gz"))
+        if not vel_files:
+            raise FileNotFoundError(f"No *_vel.nii.gz files found in {mr_quant}")
+        vel_path = vel_files[0]
+        if len(vel_files) > 1:
+            print(f"  WARNING: Multiple velocity files found, using {vel_path.name}")
+    else:
+        vel_path = input_path
 
-def main():
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Calculate 3D strain from velocity data.')
+    json_path = vel_path.with_name(vel_path.name.replace("_vel.nii.gz", "_vel.json"))
+    if not json_path.exists():
+        raise FileNotFoundError(f"Sidecar JSON not found: {json_path}")
 
-    # Input files
-    parser.add_argument('--data-path', required=True, help='Path to directory containing velocity data files')
-    parser.add_argument('--prefix', help='Prefix of velocity data files (optional)')
+    img = nib.load(str(vel_path))
+    velocities = img.get_fdata()
+    affine = img.affine
+    header = img.header
 
-    # Mask files
-    parser.add_argument('--mask', help='Path to mask file (.npy) (optional)')
-    parser.add_argument('--roi-mask', help='Path to ROI mask file (.npy) (optional)')
+    with open(json_path) as f:
+        sidecar = json.load(f)
 
-    # Output files
-    parser.add_argument('--output-eig', default='Eig_v_output.npy', help='Output eigenvalue file (.npy)')
-    parser.add_argument('--output-disp-x', help='Output displacement x file (.npy) (optional)')
-    parser.add_argument('--output-disp-y', help='Output displacement y file (.npy) (optional)')
-    parser.add_argument('--output-disp-z', help='Output displacement z file (.npy) (optional)')
-    parser.add_argument('--output-plot', help='Output strain plot file (.png) (optional)')
-
-    # Parameters
-    parser.add_argument('--in-plane-resolution', type=float, default=1.5, help='In-plane resolution in mm')
-    parser.add_argument('--slice-thickness', type=float, default=1.5, help='Slice thickness in mm')
-    parser.add_argument('--repetition-time', type=float, default=6.7, help='Repetition time in ms')
-    parser.add_argument('--slice-index', type=int, help='Slice index for 2D analysis (optional)')
-    parser.add_argument('--no-display', action='store_true', help='Do not display plots')
-    parser.add_argument('--config', required=True, help='Path to JSON configuration file')
-
-    args = parser.parse_args()
-
-    # Load combined data file
-    data_path = args.data_path
-    prefix = args.prefix or "DATA"
-
-    # Find the new single file
-    processed_file_pattern = os.path.join(data_path, f"{prefix}*_processed_data.npy")
-    processed_files = glob.glob(processed_file_pattern)
-
-    if not processed_files:
-        raise FileNotFoundError(f"Could not find processed data file in {data_path} with prefix {prefix}")
-
-    processed_file = processed_files[0]
-    print(f"Found processed data file: {os.path.basename(processed_file)}")
-
-    # Load the dictionary from the .npy file
-    processed_data = np.load(processed_file, allow_pickle=True).item()
-
-    # Extract the velocities and mask
-    velocities = processed_data['velocities']
-    mask_4d = processed_data['mask']
-    mask = mask_4d[..., 0]
-
-    # Split the velocities array into x, y, and z components
-    flow_x = velocities[..., 0]
-    flow_y = velocities[..., 1]
-    flow_z = velocities[..., 2]
-
-    print(f"Velocity data shape: {velocities.shape}")
-    print(f"Mask data shape: {mask.shape}")
-
-    # Load configuration from JSON file
-    print(f"Loading configuration from: {args.config}")
-    config = load_config(args.config)
-
-    # Update config values with actual data
-    info = {}
-    for key, value in config.items():
-        if key == 'CardiacNumberOfImages':
-            info[key] = velocities.shape[3]
-        elif key == 'NofPoints':
-            info[key] = velocities.shape[0]
-        elif key == 'VelocityDirectionMatrix':
-            if len(value) != 3:
-                print("Warning: VelocityDirectionMatrix should have exactly 3 elements. Using default [1,1,1].")
-                info[key] = [1, 1, 1]
-            else:
-                info[key] = value
-        elif isinstance(value, list):
-            info[key] = value
-        else:
-            # --- SAFE CONVERSION BLOCK ---
-            if isinstance(value, str):
-                try:
-                    info[key] = float(value)
-                except ValueError:
-                    info[key] = value  # Keep as string (e.g. BART text)
-            else:
-                info[key] = value
+    print(f"Loaded velocity: {vel_path.name}  shape={velocities.shape}")
+    return velocities, affine, header, sidecar, vel_path
 
 
-    print("Configuration parameters:")
-    for key, val in info.items():
-        print(f"  {key}: {val}")
+def save_ormir_mids_strain(vel_path: Path, stem: str,
+                           eigenvalues_mids: np.ndarray, eigenvectors_mids: np.ndarray,
+                           affine: np.ndarray, trigger_times: list):
+    """Save strain data in ORMIR-MIDS format to the same mr-quant folder as the velocity file.
 
-    # Now you can delete your second "for key, value in info.items()" loop
-    # because the block above already handled the conversion.
+    eigenvalues_mids:  (x, y, z, t, ev_order)
+    eigenvectors_mids: (x, y, z, t, ev_order, vector_component)
+    """
+    bids_dir = vel_path.parent  # already the mr-quant folder
+    bids_dir.mkdir(exist_ok=True)
+
+    nib.save(
+        nib.Nifti1Image(eigenvalues_mids.astype(np.float32), affine),
+        str(bids_dir / f"{stem}_strain.nii.gz")
+    )
+    with open(bids_dir / f"{stem}_strain.json", 'w') as f:
+        json.dump({
+            "FourthDimension": "TriggerTime",
+            "TriggerTime": trigger_times,
+            "FifthDimension": "EigenOrder",
+        }, f, indent=2)
+
+    nib.save(
+        nib.Nifti1Image(eigenvectors_mids.astype(np.float32), affine),
+        str(bids_dir / f"{stem}_strain-vec.nii.gz")
+    )
+    with open(bids_dir / f"{stem}_strain-vec.json", 'w') as f:
+        json.dump({
+            "FourthDimension": "TriggerTime",
+            "TriggerTime": trigger_times,
+            "FifthDimension": "EigenOrder",
+            "SixthDimension": "VectorComponent",
+        }, f, indent=2)
+
+    print(f"  {stem}_strain.nii.gz    {eigenvalues_mids.shape}")
+    print(f"  {stem}_strain.json")
+    print(f"  {stem}_strain-vec.nii.gz {eigenvectors_mids.shape}")
+    print(f"  {stem}_strain-vec.json")
+
+
+def calc_strain_pipeline(velocities_ms: np.ndarray, affine: np.ndarray,
+                         header, sidecar: dict):
+    """Run the full strain pipeline on ORMIR-MIDS velocity data.
+
+    velocities_ms: (x, y, z, t, 3) in m/s
+    header:        NIfTI header (used to extract voxel size)
+    sidecar:       _vel.json dict (used to extract TriggerTime)
+
+    Returns:
+        eig_vals_mids:  (x, y, z, t, ev_order)   ORMIR-MIDS shape
+        eig_vecs_mids:  (x, y, z, t, ev_order, 3) ORMIR-MIDS shape
+        mask:           (x, y, z) boolean
+    """
+    n_phases = velocities_ms.shape[3]
+
+    # Voxel sizes from NIfTI header (mm)
+    pixdim = header.get_zooms()
+    in_plane_res = [float(pixdim[0]), float(pixdim[1])]
+    slice_thickness = float(pixdim[2])
+    print(f"Voxel size (mm): {in_plane_res[0]:.3f} x {in_plane_res[1]:.3f} x {slice_thickness:.3f}")
+    if abs(in_plane_res[0] - 1.0) < 1e-6 and abs(in_plane_res[1] - 1.0) < 1e-6 and abs(slice_thickness - 1.0) < 1e-6:
+        raise ValueError(
+            "Voxel size appears to be 1x1x1 mm (identity); check NIfTI header pixdim. "
+            "Displacement calculation requires accurate voxel dimensions."
+        )
+
+    # TR from consecutive TriggerTime values
+    trigger_times = sidecar.get("TriggerTime", [])
+    if len(trigger_times) >= 2:
+        tr_ms = float(trigger_times[1]) - float(trigger_times[0])
+    else:
+        tr_ms = 7.0
+        print(f"  WARNING: TriggerTime not found in sidecar, defaulting TR to {tr_ms} ms")
+
+    info = {
+        'CardiacNumberOfImages': n_phases,
+        'SliceThickness': slice_thickness,
+        'RepetitionTime': tr_ms,
+        'InPlaneResolution': in_plane_res,
+    }
+
+    # Recover mask from zero-ed velocity voxels (reconstruct_and_process zeros outside mask)
+    mask = np.any(velocities_ms != 0, axis=(3, 4))
+    print(f"Mask: {np.sum(mask)} voxels")
+
+    flow_x = velocities_ms[..., 0]
+    flow_y = velocities_ms[..., 1]
+    flow_z = velocities_ms[..., 2]
+
     print("Calculating displacements...")
     dispVxi, dispVyi, dispVzi = calc_disp_3d(flow_x, flow_y, flow_z, info, mask)
 
-    # Save displacement data if requested
-    if args.output_disp_x:
-        print(f"Saving displacement x to: {args.output_disp_x}")
-        np.save(args.output_disp_x, dispVxi)
-    if args.output_disp_y:
-        print(f"Saving displacement y to: {args.output_disp_y}")
-        np.save(args.output_disp_y, dispVyi)
-    if args.output_disp_z:
-        print(f"Saving displacement z to: {args.output_disp_z}")
-        np.save(args.output_disp_z, dispVzi)
-
-    # Calculate strain
     print("Calculating strain...")
-    Eig_v = calc_strain_3d(dispVxi, dispVyi, dispVzi, mask)
+    Eig_v, Eig_vecs = calc_strain_3d(dispVxi, dispVyi, dispVzi, mask)
 
-    # Save eigenvalue data
-    print(f"Saving eigenvalues to: {args.output_eig}")
-    if os.path.isabs(args.output_eig):
-        output_eig_path = args.output_eig
-    else:
-        output_eig_path = os.path.join(args.data_path, args.output_eig)
-    np.save(output_eig_path, Eig_v)
+    # Reorder to ORMIR-MIDS axis convention
+    eig_vals_mids = Eig_v.transpose(0, 1, 2, 4, 3)          # (x,y,z,3,t) -> (x,y,z,t,3)
+    eig_vecs_mids = Eig_vecs.transpose(0, 1, 2, 5, 3, 4)    # (x,y,z,3,3,t) -> (x,y,z,t,3,3)
 
-    # Process ROI mask if provided
-    if args.roi_mask:
-        print(f"Loading ROI mask from: {args.roi_mask}")
-        roi_mask = np.load(args.roi_mask)
-        use_mask = roi_mask
-    else:
-        use_mask = mask
+    return eig_vals_mids, eig_vecs_mids, mask
 
-    # If slice index is provided, use only that slice
-    if args.slice_index is not None:
-        print(f"Using slice index: {args.slice_index}")
-        if len(Eig_v.shape) == 5:  # 3D + 3 eigenvalues + phases
-            slice_eig = Eig_v[args.slice_index, :, :, :, :]
-            if len(use_mask.shape) == 4:  # 4D mask
-                slice_mask = use_mask[args.slice_index, :, :, :]
-            else:
-                slice_mask = use_mask
-        else:
-            slice_eig = Eig_v
-            slice_mask = use_mask
 
-        e1_Line, e1_max, e2_Line, e2_max, e3_Line, e3_max = sum_strain_3d(slice_eig, slice_mask, info)
-    else:
-        # Process full volume
-        e1_Line, e1_max, e2_Line, e2_max, e3_Line, e3_max = sum_strain_3d(Eig_v, use_mask, info)
+def main():
+    parser = argparse.ArgumentParser(description='Calculate 3D strain from ORMIR-MIDS velocity data.')
+    parser.add_argument('input', type=str,
+                        help='Path to *_vel.nii.gz file, or ORMIR-MIDS subject folder '
+                             '(mr-quant/*_vel.nii.gz is used in that case)')
+    parser.add_argument('--output-plot', help='Save strain plot to this file (.png)')
+    parser.add_argument('--no-display', action='store_true', help='Do not display plots')
+    args = parser.parse_args()
 
-    # Display results
-    print(f"First principal strain max: {e1_max}")
-    print(f"Second principal strain max: {e2_max}")
-    print(f"Third principal strain max: {e3_max}")
+    velocities_ms, affine, header, sidecar, vel_path = load_ormir_mids_velocity(Path(args.input))
 
-    # Create and save plots if not disabled
+    stem = vel_path.name.replace("_vel.nii.gz", "")
+
+    eig_vals_mids, eig_vecs_mids, mask = calc_strain_pipeline(velocities_ms, affine, header, sidecar)
+
+    trigger_times = sidecar.get("TriggerTime", list(range(eig_vals_mids.shape[3])))
+    save_ormir_mids_strain(vel_path, stem, eig_vals_mids, eig_vecs_mids, affine, trigger_times)
+
+    n_phases = eig_vals_mids.shape[3]
+    # Internal shape (x,y,z,3,t) needed by sum_strain_3d
+    Eig_v_internal = eig_vals_mids.transpose(0, 1, 2, 4, 3)
+    e1_Line, e1_max, e2_Line, e2_max, e3_Line, e3_max = sum_strain_3d(Eig_v_internal, mask, n_phases)
+
+    print(f"Largest positive strain max: {e1_max}")
+    print(f"Most negative strain max:    {e2_max}")
+    print(f"Remaining strain max:        {e3_max}")
+
     if not args.no_display or args.output_plot:
         plt.figure(figsize=(10, 6))
-        for data, label, color in zip([e1_Line, e2_Line, e3_Line],
-                                      ['e1 (stretching)', 'e2 (intermediate)', 'e3 (compression)'],
-                                      ['blue', 'green', 'red']):
-            plt.plot(data, label=f"{label}", color=color)
+        for data, label, color in zip(
+            [e1_Line, e2_Line, e3_Line],
+            ['e1 (largest positive)', 'e2 (most negative)', 'e3 (remaining)'],
+            ['blue', 'red', 'green']
+        ):
+            plt.plot(data, label=label, color=color)
 
-        plt.xlabel('Cardiac Phase')
+        plt.xlabel('Phase')
         plt.ylabel('Strain')
         plt.title('Principal Strains')
         plt.legend()
         plt.grid(True)
 
         if args.output_plot:
-            print(f"Saving plot to: {args.output_plot}")
             plt.savefig(args.output_plot, dpi=300)
 
         if not args.no_display:
             plt.show()
-
 
 
 if __name__ == "__main__":
