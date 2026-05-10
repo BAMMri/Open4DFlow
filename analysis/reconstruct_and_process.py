@@ -15,14 +15,10 @@ import nibabel as nib
 os.environ['BART_CUDA_GPU'] = '1'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'  # Use GPU 0, change if you have multiple GPUs
 
-# Add your bart path
-sys.path.append('/home/marta/Projects/bart_projects/bart/python')
-
 import bart
 from bart import cfl
 
 bart_orig = bart.bart
-
 
 def bart_print(nargout, cmd, *args):
     print("Executing bart", cmd)
@@ -39,6 +35,7 @@ def reconstruct_and_process_all(data_dir, venc_cms=20, use_gpu=True, ecalib_r='2
     Returns a dict keyed by file_base with entries:
         {'velocities': ndarray (x,y,z,t,3) in m/s, 'mask': ndarray, 'magnitude': ndarray}
     """
+    print("\n[2/3]Performing recon...")
     if use_gpu:
         print("GPU acceleration enabled")
         os.environ['BART_CUDA_GPU'] = '1'
@@ -165,7 +162,7 @@ def extract_geometry(dataset: ismrmrd.Dataset, mrd_path: Path) -> np.ndarray:
 
 
 def convert_mrd_to_bart(dataset: ismrmrd.Dataset, output_dir: Path, stem: str) -> Path:
-    print("\n[2/3] Converting .mrd -> BART format...")
+    print("\n[1/3] Converting .mrd -> BART format...")
     cfl_path = output_dir / (stem + '.cfl')
     hdr_path = output_dir / (stem + '.hdr')
 
@@ -202,7 +199,8 @@ def convert_mrd_to_bart(dataset: ismrmrd.Dataset, output_dir: Path, stem: str) -
 
 
 def save_ormir_mids(output_dir: Path, stem: str, velocities_ms: np.ndarray, venc_ms: float,
-                    affine: np.ndarray, tr_ms: float, config: dict):
+                    affine: np.ndarray, tr_ms: float, config: dict,
+                    magnitude: np.ndarray = None, mask: np.ndarray = None):
     """Save velocity data directly in ORMIR-MIDS format (mr-quant folder).
 
     velocities_ms: (x, y, z, t, 3) array in m/s
@@ -210,6 +208,8 @@ def save_ormir_mids(output_dir: Path, stem: str, velocities_ms: np.ndarray, venc
     affine:        4x4 affine matrix for the NIfTI header
     tr_ms:         repetition time in ms, used to compute TriggerTime array
     config:        sidecar JSON dict; VelocityEncodingDirection is read from it if present
+    magnitude:     (x, y, z, t) reference encoding magnitude (optional)
+    mask:          (x, y, z) boolean mask (optional)
     """
     print("\n[3/3] Saving ORMIR-MIDS format...")
 
@@ -239,6 +239,27 @@ def save_ormir_mids(output_dir: Path, stem: str, velocities_ms: np.ndarray, venc
 
     print(f"  {stem}_vel.nii.gz {velocities_ms.shape}")
     print(f"  {stem}_vel.json")
+
+    if magnitude is not None:
+        nib.save(
+            nib.Nifti1Image(magnitude.astype(np.float32), affine),
+            str(bids_dir / f"{stem}_part-mag.nii.gz")
+        )
+        mag_sidecar = {
+            "FourthDimension": "TriggerTime",
+            "TriggerTime": trigger_times,
+        }
+        with open(bids_dir / f"{stem}_part-mag.json", 'w') as f:
+            json.dump(mag_sidecar, f, indent=2)
+        print(f"  {stem}_part-mag.nii.gz {magnitude.shape}")
+        print(f"  {stem}_part-mag.json")
+
+    if mask is not None:
+        nib.save(
+            nib.Nifti1Image(mask.astype(np.uint8), affine),
+            str(bids_dir / f"{stem}_mask.nii.gz")
+        )
+        print(f"  {stem}_mask.nii.gz {mask.shape}")
 
 
 def check_gpu_availability():
@@ -293,14 +314,8 @@ def process_4dflow(
         compressed_coils=compressed_coils, joint_recon=joint_recon)
 
     for file_base, data in results.items():
-        save_ormir_mids(output_dir, Path(file_base).name, data['velocities'], venc_ms, affine, tr_ms, config)
-
-    for p in output_dir.glob("*.cfl"):
-        p.unlink()
-        hdr = p.with_suffix('.hdr')
-        if hdr.exists():
-            hdr.unlink()
-    print("Cleaned up BART intermediate files.")
+        save_ormir_mids(output_dir, Path(file_base).name, data['velocities'], venc_ms, affine, tr_ms, config,
+                        magnitude=np.mean(data['magnitude'], axis=-1), mask=data['mask'])
 
 
 if __name__ == "__main__":
@@ -315,6 +330,7 @@ if __name__ == "__main__":
     parser.add_argument("--cc", type=int, default=0,
                         help="Number of compressed coils for the processing. Default: no compression")
     parser.add_argument("--joint", action="store_true", help="Perform joint reconstruction of phases and velocities")
+    parser.add_argument("--keep-bart", action="store_true", help="Keep bart files")
     args = parser.parse_args()
 
     mrd_path = Path(args.mrd).resolve()
@@ -334,3 +350,11 @@ if __name__ == "__main__":
     affine = extract_geometry(dataset, mrd_path)
     process_4dflow(dataset, config, output_dir, affine, stem=mrd_path.stem,
                    use_gpu=use_gpu, compressed_coils=args.cc, joint_recon=args.joint)
+
+    if not args.keep_bart:
+        for p in output_dir.glob("*.cfl"):
+            p.unlink()
+            hdr = p.with_suffix('.hdr')
+            if hdr.exists():
+                hdr.unlink()
+        print("Cleaned up BART intermediate files.")

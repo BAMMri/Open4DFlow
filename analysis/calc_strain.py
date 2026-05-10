@@ -281,6 +281,7 @@ def calc_strain_3d(dispX, dispY, dispZ, mask):
 
         strain_tensor = strain3D(dispX_phase, dispY_phase, dispZ_phase)
 
+        skipped = 0
         for ix in range(dimx):
             for iy in range(dimy):
                 for iz in range(dimz):
@@ -291,13 +292,16 @@ def calc_strain_3d(dispX, dispY, dispZ, mask):
                         # ORMIR-MIDS order: largest positive, most negative (largest abs negative), remaining
                         idx_pos = int(np.argmax(eigenvalues))
                         idx_neg = int(np.argmin(eigenvalues))
+                        if idx_pos == idx_neg:
+                            skipped += 1
+                            continue
                         idx_rem = 3 - idx_pos - idx_neg
                         order = [idx_pos, idx_neg, idx_rem]
 
                         Eig_v[ix, iy, iz, :, iph] = eigenvalues[order]
                         # eigenvectors[:, i] is i-th vector; store as (ev_order, vec_component)
                         Eig_vecs[ix, iy, iz, :, :, iph] = eigenvectors[:, order].T
-
+    print("Total skipped voxels:", skipped)
     return Eig_v, Eig_vecs
 
 
@@ -458,7 +462,9 @@ def calc_strain_pipeline(velocities_ms: np.ndarray, affine: np.ndarray,
 
     # Recover mask from zero-ed velocity voxels (reconstruct_and_process zeros outside mask)
     mask = np.any(velocities_ms != 0, axis=(3, 4))
-    print(f"Mask: {np.sum(mask)} voxels")
+    mask_n_voxel = np.sum(mask)
+    total_voxel = np.prod(velocities_ms.shape[:3])
+    print(f"Mask: {np.sum(mask)} voxels ({float(mask_n_voxel)/total_voxel*100:.2f}%)")
 
     flow_x = velocities_ms[..., 0]
     flow_y = velocities_ms[..., 1]
