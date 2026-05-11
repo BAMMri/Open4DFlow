@@ -8,6 +8,7 @@ import argparse
 import json
 import nibabel as nib
 from pathlib import Path
+from tqdm import tqdm
 
 
 def sgolay3d(z, window_size, order, derivative=None):
@@ -274,7 +275,7 @@ def calc_strain_3d(dispX, dispY, dispZ, mask):
     Eig_v = np.zeros((dimx, dimy, dimz, 3, n_phases))
     Eig_vecs = np.zeros((dimx, dimy, dimz, 3, 3, n_phases))
 
-    for iph in range(n_phases):
+    for iph in tqdm(range(n_phases)):
         dispX_phase = dispX[:, :, :, iph] if n_phases > 1 else dispX
         dispY_phase = dispY[:, :, :, iph] if n_phases > 1 else dispY
         dispZ_phase = dispZ[:, :, :, iph] if n_phases > 1 else dispZ
