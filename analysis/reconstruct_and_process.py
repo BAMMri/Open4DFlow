@@ -1,6 +1,5 @@
 import os
 import json
-import copy
 import subprocess
 import numpy as np
 import sys
@@ -170,27 +169,34 @@ def convert_mrd_to_bart(dataset: ismrmrd.Dataset, output_dir: Path, stem: str) -
         print("  BART files exist, skipping conversion.")
         return output_dir
 
-    acquisition_list = []
-    acq0 = dataset.read_acquisition(0)
-    channels, matrix_x = acq0.data.shape
-    m_y = m_z = c = ph = r = s = seg = sl = avg = 1
+    # Single bulk HDF5 read — vastly faster than N individual read_acquisition() calls
+    raw = dataset._dataset['data'][:]
+    heads = raw['head']
+    idx_fields = heads['idx']
 
-    for idx in tqdm(range(dataset.number_of_acquisitions())):
-        acq = dataset.read_acquisition(idx)
-        idx_c = acq.getHead().idx
-        m_y, m_z = max(m_y, idx_c.kspace_encode_step_1 + 1), max(m_z, idx_c.kspace_encode_step_2 + 1)
-        c, ph = max(c, idx_c.contrast + 1), max(ph, idx_c.phase + 1)
-        r, s = max(r, idx_c.repetition + 1), max(s, idx_c.set + 1)
-        seg, sl, avg = max(seg, idx_c.segment + 1), max(sl, idx_c.slice + 1), max(avg, idx_c.average + 1)
-        acquisition_list.append((copy.deepcopy(idx_c), np.copy(acq.data.astype('<c8'))))
+    acq0 = ismrmrd.Acquisition(heads[0])
+    channels, matrix_x = acq0.active_channels, acq0.number_of_samples
+
+    # Vectorized dimension discovery (one numpy pass instead of N Python iterations)
+    m_y  = int(idx_fields['kspace_encode_step_1'].max()) + 1
+    m_z  = int(idx_fields['kspace_encode_step_2'].max()) + 1
+    c    = int(idx_fields['contrast'].max()) + 1
+    ph   = int(idx_fields['phase'].max()) + 1
+    r    = int(idx_fields['repetition'].max()) + 1
+    s    = int(idx_fields['set'].max()) + 1
+    seg  = int(idx_fields['segment'].max()) + 1
+    sl   = int(idx_fields['slice'].max()) + 1
+    avg  = int(idx_fields['average'].max()) + 1
 
     out_shape = (matrix_x, m_y, m_z, channels, 1, c, ph, 1, 1, 1, r, s, seg, sl, avg, 1)
     output_mmap = np.memmap(str(cfl_path), dtype='<c8', mode='w+', shape=out_shape, order='F')
 
-    for counters, data in tqdm(acquisition_list):
-        output_mmap[:, counters.kspace_encode_step_1, counters.kspace_encode_step_2, :, 0,
-        counters.contrast, counters.phase, 0, 0, 0, counters.repetition,
-        counters.set, counters.segment, counters.slice, counters.average, 0] = data.T
+    for i in tqdm(range(len(raw))):
+        ic = idx_fields[i]
+        data = raw[i]['data'].view(np.complex64).reshape((channels, matrix_x))
+        output_mmap[:, ic['kspace_encode_step_1'], ic['kspace_encode_step_2'], :, 0,
+                    ic['contrast'], ic['phase'], 0, 0, 0, ic['repetition'],
+                    ic['set'], ic['segment'], ic['slice'], ic['average'], 0] = data.T
 
     with open(str(hdr_path), 'w') as f:
         f.write('# Dimensions\n' + ' '.join(map(str, out_shape)) + '\n')
