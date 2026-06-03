@@ -1,6 +1,6 @@
 # Open4DFlow
 
-Open4DFlow is an open-source, vendor-agnostic 4D flow MRI framework built with [PyPulseq](https://github.com/imr-framework/pypulseq). It provides ready-to-run pulse sequences and a full analysis pipeline, from acquisition to velocity reconstruction to diplacement ans strain calculation.
+Open4DFlow is an open-source, vendor-agnostic 4D flow MRI framework built with [PyPulseq](https://github.com/imr-framework/pypulseq). It provides ready-to-run pulse sequences and a full analysis pipeline, from acquisition to velocity reconstruction to displacement and strain calculation.
 
 ## Repository Structure
 
