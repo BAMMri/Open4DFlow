@@ -34,10 +34,8 @@ Install GrOpt by building the Cython wrappers from the `python/` directory of th
 ```bash
 git clone https://github.com/mloecher/gropt
 cd gropt/python
-python setup.py build_ext --inplace
+python setup.py install
 ```
-
-Then add the `gropt/python/` directory to your Python path, or copy the built module into your working environment.
 
 ---
 
