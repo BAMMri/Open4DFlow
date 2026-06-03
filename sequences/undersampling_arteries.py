@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import numpy as np
 import pypulseq as pp
 from scipy.spatial import cKDTree
@@ -196,7 +197,7 @@ class MRISequence:
         #
         #     self.phase_samples = np.array(filtered_points, dtype=object)
 
-        def save_derived_params(self, filepath: str, ppreport=None) -> None:
+    def save_derived_params(self, filepath: str, ppreport=None) -> None:
         """Save all derived parameters to a JSON file."""
         import json
 
@@ -580,12 +581,10 @@ if __name__ == "__main__":
     PLOT_SEQUENCE=False
     PLOT_KSPACE=False
     TRIG_TIME = 80 #1.52
-
+ 
     RESOLUTION = [1.5e-3, 1.5e-3, 1.5e-3]
     FOV = [200e-3, 200e-3, 80e-3]
     VENC = 1.5
-
-    from undersampling_arteries import MRISequence
 
     seq = MRISequence(TE=4.5e-3, TR=7e-3, fov=FOV, Nx=int(np.ceil(FOV[0] / RESOLUTION[0])),Ny=int(np.ceil(FOV[1] / RESOLUTION[1])),Nz=int(np.ceil(FOV[2] / RESOLUTION[2])),
                       Nslices=6, venc=VENC, slice_thickness=80e-3, alpha=10, bandwidth=1e3, tbw=2, heart_rate=TRIG_TIME, undersampling_factor=9)
@@ -624,7 +623,7 @@ if __name__ == "__main__":
                     # print("ky and kz=", ky, kz)
                     areay = (seq.Ny / 2 - ky) / seq.fov[1]
                     areaz = (seq.Nz / 2 - kz) / seq.fov[2]
-                    print("areay and areaz=", areay, areaz)
+                    #print("areay and areaz=", areay, areaz)
                     labels = []
                     labels.append(pp.make_label(type="SET", label="PAR", value=int(kz)))
                     labels.append(pp.make_label(type="SET", label="LIN", value=int(ky)))

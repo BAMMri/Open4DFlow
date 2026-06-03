@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import numpy as np
 import pypulseq as pp
 from scipy.spatial import cKDTree
@@ -195,7 +196,7 @@ class MRISequence:
         #
         #     self.phase_samples = np.array(filtered_points, dtype=object)
 
-        def save_derived_params(self, filepath: str, ppreport=None) -> None:
+    def save_derived_params(self, filepath: str, ppreport=None) -> None:
         """Save all derived parameters to a JSON file."""
         import json
 
@@ -584,8 +585,6 @@ if __name__ == "__main__":
     FOV = [150e-3, 100e-3, 80e-3]
     VENC = 0.20
 
-    from undersampling_forearm import MRISequence
-
     seq = MRISequence(TE=4.7e-3, TR=6.9e-3, fov=FOV, Nx=int(np.ceil(FOV[0] / RESOLUTION[0])),Ny=int(np.ceil(FOV[1] / RESOLUTION[1])),Nz=int(np.ceil(FOV[2] / RESOLUTION[2])),
                       Nslices=6, venc=VENC, slice_thickness=80e-3, alpha=10, bandwidth=1e3, tbw=2, heart_rate=TRIG_TIME,undersampling_factor=9)
 
@@ -622,7 +621,7 @@ if __name__ == "__main__":
                     # print("ky and kz=", ky, kz)
                     areay = (seq.Ny / 2 - ky) / seq.fov[1]
                     areaz = (seq.Nz / 2 - kz) / seq.fov[2]
-                    print("areay and areaz=", areay, areaz)
+                    #print("areay and areaz=", areay, areaz)
                     labels = []
                     labels.append(pp.make_label(type="SET", label="PAR", value=int(kz)))
                     labels.append(pp.make_label(type="SET", label="LIN", value=int(ky)))
@@ -640,10 +639,10 @@ if __name__ == "__main__":
     json_path = "derived_params.json"
     seq.save_derived_params(json_path)
     #print(seq.seq.test_report())
-    #print('Sequence ready')
-    #seq.seq.set_definition('FOV', seq.fov)
-    #seq.seq.set_definition('Name', 'gre3d')
-    #seq.seq.write(f'US9_perc24_23_{TRIG_TIME}_PHS{max_phases}_FOV{int(FOV[0] * 1000)}x{int(FOV[1] * 1000)}x{int(FOV[2] * 1000)}_Venc{int(VENC * 100)}.seq')
+    print('Sequence ready')
+    seq.seq.set_definition('FOV', seq.fov)
+    seq.seq.set_definition('Name', 'gre3d')
+    seq.seq.write(f'US9_perc24_23_{TRIG_TIME}_PHS{max_phases}_FOV{int(FOV[0] * 1000)}x{int(FOV[1] * 1000)}x{int(FOV[2] * 1000)}_Venc{int(VENC * 100)}.seq')
 
 
     if PLOT_KSPACE:

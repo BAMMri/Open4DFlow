@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import copy
 import numpy as np
 import pypulseq as pp
