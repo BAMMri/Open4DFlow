@@ -1,20 +1,11 @@
-# Pulseq-4DFlow
+# Pulseq-Open4DFlow
 
-Pulseq-4DFlow provides fully sampled and undersampled 4D flow MRI sequence files created using [PyPulseq](https://github.com/imr-framework/pypulseq). These sequences are designed for experimental use and can be exported as `.seq` files to run directly on compatible MRI scanners.
+Open4DFlow is an open-source, vendor-agnostic 4D flow MRI framework built with [PyPulseq](https://github.com/imr-framework/pypulseq). It provides ready-to-run pulse sequences and a full analysis pipeline, from acquisition to velocity reconstruction to diplacement ans strain calculation.
 
-## Project Overview
+## Repository Structure
 
-This repository contains several Pulseq-based 4D flow sequences for testing and development:
-
-- **4DFlow** – The standard, fully sampled 4D flow sequence.  
-- **4DFlow_undersampled** – A pilot sequence that explores scan time reduction through undersampling.
-- **gradient_probing** – Asequnce to be run once before any scans to map the physical direction of the gradiens on your specific system.  
-- **Undersampling_arteries** – Application of the undersampled sequence for neurovascular application (this version is for a 3T Siemens Vida scanner).  
-- **Undersampling_leg** – Version adapted for lower limb (leg) imaging (this version is for a 3T Siemens Vida Fit scanner).  
-- **Undersampling_forearm** – Version adapted for upper limb (forearm) imaging (this version is for a 3T Siemens Prisma scanner).
-
-Each sequence produces a `.seq` file that can be executed on the scanner using PyPulseq.
-
+- **`sequences/`** – Pulse sequence scripts that generate `.seq` files for direct execution.
+- **`analysis/`** – Post-processing pipeline for reconstructing velocity,displacement ans strain fields from acquired 4D flow data.
 
 ## Notes
 
