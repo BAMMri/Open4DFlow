@@ -9,7 +9,7 @@ Open4DFlow is an open-source, vendor-agnostic 4D flow MRI framework built with [
 
 ## Features
 
-- **Compressed sensing acceleration** – The undersampled sequences use variable-density k-space undersampling with iterative reconstruction via [BART](https://mrirecon.github.io/bart/), enabling significantly faster acquisitions.
+- **Compressed sensing acceleration** – The undersampled sequences use poisson disc k-space undersampling, enabling significantly faster acquisitions.
 - **Vendor-agnostic gradient handling** – A gradient probing sequence identifies the physical direction of each gradient axis at the used scanner, ensuring correct velocity direction interpretation across scanner vendors.
 - **Standardised file formats** – The analysis pipeline outputs data in [ORMIR-MIDS](https://github.com/ORMIR-MIDS/ORMIR_MIDS) format (NIfTI + JSON sidecar), ensuring compatibility with other muscle and cardiovascular MRI tools.
 - **Open reconstruction** – Image reconstruction is performed with the [BART toolbox](https://mrirecon.github.io/bart/), with optional GPU acceleration.
