@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import numpy as np
 import pypulseq as pp
 from scipy.spatial import cKDTree
@@ -625,7 +626,7 @@ if __name__ == "__main__":
                     # print("ky and kz=", ky, kz)
                     areay = (seq.Ny / 2 - ky) / seq.fov[1]
                     areaz = (seq.Nz / 2 - kz) / seq.fov[2]
-                    print("areay and areaz=", areay, areaz)
+                    #print("areay and areaz=", areay, areaz)
                     labels = []
                     labels.append(pp.make_label(type="SET", label="PAR", value=int(kz)))
                     labels.append(pp.make_label(type="SET", label="LIN", value=int(ky)))
@@ -645,7 +646,7 @@ if __name__ == "__main__":
     print('Sequence ready')
     seq.seq.set_definition('FOV', seq.fov)
     seq.seq.set_definition('Name', 'gre3d')
-    seq.seq.write(f'leg_shortdelay_US9_perc25_20_{TRIG_TIME}_PHS{max_phases}_FOV{int(FOV[0] * 1000)}x{int(FOV[1] * 1000)}x{int(FOV[2] * 1000)}_Venc{int(VENC * 100)}.seq')
+    seq.seq.write(f'US9_perc25_20_{TRIG_TIME}_PHS{max_phases}_FOV{int(FOV[0] * 1000)}x{int(FOV[1] * 1000)}x{int(FOV[2] * 1000)}_Venc{int(VENC * 100)}.seq')
 
 
     if PLOT_KSPACE:
