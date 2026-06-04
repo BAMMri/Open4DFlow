@@ -366,7 +366,7 @@ class MRISequence:
             'gmax': 50,
             'smax': 110.0,
             'moment_params': moment_params,
-            'TE': 3.2
+            'TE': 3.3
         }
 
         if additional_params:
@@ -525,16 +525,16 @@ class MRISequence:
         adc.dwell = np.round(adc.dwell / self.seq.adc_raster_time) * self.seq.adc_raster_time
         # smooth waveforms
         gx_vel.tt, gx_vel.waveform = self.smooth_gradient(gx_vel.tt, gx_vel.waveform, 'x', start_smooth=0.0e-3,
-                                                          end_smooth=3.19e-3,  # 5.055e-3,
+                                                          end_smooth=3.29e-3,  # 5.055e-3,
                                                           filter_size=11, plot=False, threshold=1e4)
 
         gz_vel.tt, gz_vel.waveform = self.smooth_gradient(gz_vel.tt, gz_vel.waveform, 'z', start_smooth=0.0e-3,
-                                                          end_smooth=3.19e-3,  # 5.055e-3,
+                                                          end_smooth=3.29e-3,  # 5.055e-3,
                                                           filter_size=11, plot=False, threshold=1e4)
 
         gy_vel.tt, gy_vel.waveform = self.smooth_gradient(gy_vel.tt, gy_vel.waveform, 'y',
                                                           start_smooth=0.0e-3,
-                                                          end_smooth=3.19e-3,  # 5.055e-3,
+                                                          end_smooth=3.29e-3,  # 5.055e-3,
                                                           filter_size=11, plot=False, threshold=1e4)
         # print(gy_vel.tt, gy_vel.waveform)
         # assemble sequence
@@ -583,9 +583,9 @@ if __name__ == "__main__":
 
     RESOLUTION = [1.5e-3, 1.5e-3, 1.5e-3]
     FOV = [150e-3, 100e-3, 80e-3]
-    VENC = 0.20
+    VENC = 0.16
 
-    seq = MRISequence(TE=4.7e-3, TR=6.9e-3, fov=FOV, Nx=int(np.ceil(FOV[0] / RESOLUTION[0])),Ny=int(np.ceil(FOV[1] / RESOLUTION[1])),Nz=int(np.ceil(FOV[2] / RESOLUTION[2])),
+    seq = MRISequence(TE=4.7e-3, TR=7e-3, fov=FOV, Nx=int(np.ceil(FOV[0] / RESOLUTION[0])),Ny=int(np.ceil(FOV[1] / RESOLUTION[1])),Nz=int(np.ceil(FOV[2] / RESOLUTION[2])),
                       Nslices=6, venc=VENC, slice_thickness=80e-3, alpha=10, bandwidth=1e3, tbw=2, heart_rate=TRIG_TIME,undersampling_factor=9)
 
     # M1 values in mT*ms^2/m
